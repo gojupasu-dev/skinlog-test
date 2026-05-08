@@ -13,7 +13,7 @@
 <body><div id="root" class="app"></div>
 <script>
 const APP_NAME='SootheNote', APP_TAG='우리 가족 피부 기록장', APP_SUB='피부 변화를 차분히 기록해요';
-const KEY='skinlog_mvp_v1', LEGACY_KEYS=['skinlog_mvp_v1','soothenote_app_v1','soothenote_v10','soothenote_test'], VERSION='v10-weekly-skin-card';
+const KEY='skinlog_mvp_v1', LEGACY_KEYS=['skinlog_mvp_v1','soothenote_app_v1','soothenote_v10','soothenote_test'], DB_NAME='soothenote_local_db', DB_STORE='app_state', DB_STATE_KEY='state_v1', VERSION='v10-indexeddb-edit-fix-standalone';
 const BODY=[['face','얼굴'],['ear','귀'],['neck','목'],['trunk','몸통'],['buttocks','엉덩이'],['arm','팔'],['wrist','손목'],['hand','손'],['leg','다리'],['ankle','발목'],['foot','발'],['other','기타']];
 const LEG={chest:'가슴',belly:'배',back:'등'};
 const HOLIDAYS={'2025-05-05':1,'2025-05-06':1,'2025-06-03':1,'2025-06-06':1,'2025-08-15':1,'2025-10-03':1,'2025-10-05':1,'2025-10-06':1,'2025-10-07':1,'2025-10-08':1,'2025-10-09':1,'2025-12-25':1,'2026-01-01':1,'2026-02-16':1,'2026-02-17':1,'2026-02-18':1,'2026-03-01':1,'2026-03-02':1,'2026-05-05':1,'2026-05-24':1,'2026-05-25':1,'2026-06-03':1,'2026-06-06':1,'2026-08-15':1,'2026-08-17':1,'2026-09-24':1,'2026-09-25':1,'2026-09-26':1,'2026-10-03':1,'2026-10-05':1,'2026-10-09':1,'2026-12-25':1};
@@ -21,8 +21,85 @@ let state={onboardingCompleted:false,profiles:[],selectedProfileId:null,records:
 let tab='home', draft=null, detailId=null, formMode='detail', splash=true, toast='', preview=null, addProfile=false, editProfileId=null, filter='all', calMonth=monthVal(new Date()), showPicker=false, reportRange=7;
 function uid(p){return p+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,7)}
 function esc(s){return String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
-function load(){try{for(const k of LEGACY_KEYS){const raw=localStorage.getItem(k); if(raw){state=norm(JSON.parse(raw)); break;}}}catch(e){} }
-function save(){const payload=JSON.stringify(norm(state)); localStorage.setItem(KEY,payload); try{localStorage.setItem('soothenote_app_v1',payload)}catch(e){}}
+function openDb(){
+  return new Promise((resolve,reject)=>{
+    if(!window.indexedDB){reject(new Error('IndexedDB unavailable'));return}
+    const req=indexedDB.open(DB_NAME,1);
+    req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(DB_STORE))db.createObjectStore(DB_STORE)};
+    req.onsuccess=()=>resolve(req.result);
+    req.onerror=()=>reject(req.error||new Error('IndexedDB open failed'));
+  });
+}
+async function readDb(){
+  const db=await openDb();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction(DB_STORE,'readonly'), st=tx.objectStore(DB_STORE), req=st.get(DB_STATE_KEY);
+    req.onsuccess=()=>resolve(req.result||null);
+    req.onerror=()=>reject(req.error||new Error('IndexedDB read failed'));
+    tx.oncomplete=()=>db.close();
+  });
+}
+async function writeDb(data){
+  const db=await openDb();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction(DB_STORE,'readwrite'), st=tx.objectStore(DB_STORE);
+    st.put(norm(data),DB_STATE_KEY);
+    tx.oncomplete=()=>{db.close();resolve(true)};
+    tx.onerror=()=>{db.close();reject(tx.error||new Error('IndexedDB write failed'))};
+  });
+}
+async function deleteDbState(){
+  try{
+    const db=await openDb();
+    await new Promise((resolve,reject)=>{
+      const tx=db.transaction(DB_STORE,'readwrite');
+      tx.objectStore(DB_STORE).delete(DB_STATE_KEY);
+      tx.oncomplete=()=>{db.close();resolve(true)};
+      tx.onerror=()=>{db.close();reject(tx.error||new Error('IndexedDB delete failed'))};
+    });
+  }catch(e){console.warn('IndexedDB 삭제 실패',e)}
+}
+async function load(){
+  try{
+    const dbState=await readDb();
+    if(dbState){state=norm(dbState);return}
+  }catch(e){console.warn('IndexedDB 불러오기 실패',e)}
+  try{
+    for(const k of LEGACY_KEYS){
+      const raw=localStorage.getItem(k);
+      if(raw){state=norm(JSON.parse(raw));writeDb(state).catch(()=>{});break;}
+    }
+  }catch(e){}
+}
+function save(){
+  const normalized=norm(state);
+  writeDb(normalized).catch(e=>console.warn('IndexedDB 저장 실패',e));
+  try{
+    const light={...normalized,records:normalized.records.map(r=>({...r,photos:[]}))};
+    localStorage.setItem(KEY,JSON.stringify(light));
+    localStorage.setItem('soothenote_app_v1',JSON.stringify(light));
+  }catch(e){console.warn('localStorage 보조 저장 실패',e)}
+}
+function compressImageFile(file,{maxSize=1280,quality=.72}={}){
+  return new Promise((resolve,reject)=>{
+    if(!file||!file.type||!file.type.startsWith('image/')){reject(new Error('이미지 파일이 아닙니다.'));return}
+    const reader=new FileReader();
+    reader.onerror=()=>reject(reader.error||new Error('사진을 읽지 못했습니다.'));
+    reader.onload=()=>{
+      const img=new Image();
+      img.onerror=()=>reject(new Error('사진을 불러오지 못했습니다.'));
+      img.onload=()=>{
+        const scale=Math.min(1,maxSize/Math.max(img.width,img.height));
+        const w=Math.max(1,Math.round(img.width*scale)),h=Math.max(1,Math.round(img.height*scale));
+        const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
+        const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0,w,h);
+        resolve(canvas.toDataURL('image/jpeg',quality));
+      };
+      img.src=String(reader.result||'');
+    };
+    reader.readAsDataURL(file);
+  });
+}
 function norm(x){x=x||{};let profiles=Array.isArray(x.profiles)?x.profiles:(x.profile?[x.profile]:[]);let sel=x.selectedProfileId||profiles[0]?.id||null;let records=(x.records||[]).map(r=>({...r,profileId:r.profileId||sel,food:r.food||{breakfast:'',lunch:'',dinner:'',snack:r.foodMemo||''},foodMemo:r.foodMemo||r.food?.snack||'',symptoms:{itchScore:0,rednessScore:0,oozeScore:0,scaleScore:0,scratchScore:0,...r.symptoms},recordMode:r.recordMode||'detail',symptomKeys:r.symptomKeys||null}));return{onboardingCompleted:!!x.onboardingCompleted,profiles,selectedProfileId:sel,records}}
 function prof(){return state.profiles.find(p=>p.id===state.selectedProfileId)||state.profiles[0]||null}
 function emoji(p){return p?.type==='child'?'😘':'😊'}
@@ -72,8 +149,32 @@ function form(){let quick=formMode==='quick', edit=!!state.records.find(x=>x.id=
 function score(label,key){return `<div class="card score" style="margin:10px 0"><div style="display:flex;justify-content:space-between"><b>${label}</b><span class="pill">${draft.symptoms[key]} / 10</span></div><input type="range" min="0" max="10" value="${draft.symptoms[key]}" oninput="draft.symptoms.${key}=+this.value;this.previousElementSibling.querySelector('.pill').textContent=this.value+' / 10'"></div>`}
 function extra(){return `<div class="extra-wrap"><div class="field"><label class="label">오늘 사용한 약 / 보습제</label><input class="input" value="${esc(draft.medicines)}" onchange="draft.medicines=this.value"></div>${['breakfast','lunch','dinner','snack'].map((k,i)=>`<div class="field"><label class="label">${['아침','점심','저녁','간식 / 특이 음식'][i]}</label><input class="input" value="${esc(draft.food[k]||'')}" onchange="draft.food.${k}=this.value;${k==='snack'?'draft.foodMemo=this.value':''}"></div>`).join('')}<div class="field"><label class="label">수면 상태</label><select class="select" onchange="draft.sleepStatus=this.value"><option value="" ${!draft.sleepStatus?'selected':''}>선택 안 함</option><option value="good" ${draft.sleepStatus==='good'?'selected':''}>좋음</option><option value="normal" ${draft.sleepStatus==='normal'?'selected':''}>보통</option><option value="bad" ${draft.sleepStatus==='bad'?'selected':''}>나쁨</option></select></div><div class="field"><label class="label">메모</label><textarea class="textarea" onchange="draft.note=this.value">${esc(draft.note)}</textarea></div></div>`}
 function togglePart(k){draft.bodyParts=draft.bodyParts.includes(k)?draft.bodyParts.filter(x=>x!==k):[...draft.bodyParts,k];render()}
-function addPhotos(files){Promise.all([...files].slice(0,10-draft.photos.length).map(f=>new Promise(res=>{let rd=new FileReader();rd.onload=()=>res({id:uid('photo'),dataUrl:rd.result,name:f.name});rd.readAsDataURL(f)}))).then(imgs=>{draft.photos=[...draft.photos,...imgs].slice(0,10);render()})}
+async function addPhotos(files){
+  const list=[...files].slice(0,10-draft.photos.length);
+  if(!list.length)return;
+  try{
+    const imgs=await Promise.all(list.map(async f=>({id:uid('photo'),dataUrl:await compressImageFile(f,{maxSize:1280,quality:.72}),name:f.name,originalSize:f.size})));
+    draft.photos=[...draft.photos,...imgs].slice(0,10);
+    render();
+  }catch(e){
+    console.warn('사진 압축 실패',e);
+    alert('사진을 저장하기 어려웠습니다. 용량이 작은 사진으로 다시 시도해 주세요.');
+  }
+}
 function loadPrev(){let last=selectedRecords()[0];if(!last)return alert('불러올 이전 기록이 없습니다.');draft={...draft,bodyParts:[...last.bodyParts],symptoms:{...draft.symptoms,...last.symptoms},medicines:last.medicines||'',food:{breakfast:last.food?.breakfast||'',lunch:last.food?.lunch||'',dinner:last.food?.dinner||'',snack:last.food?.snack||last.foodMemo||''},foodMemo:last.foodMemo||'',sleepStatus:last.sleepStatus||'',note:last.note||''};alert('이전 기록을 불러왔습니다. 사진과 기록 시간은 새 기록 기준으로 유지됩니다.');render()}
+function editRec(id){
+  const rec=state.records.find(x=>x.id===id);
+  if(!rec){alert('수정할 기록을 찾지 못했습니다.');return}
+  const mode=rec.recordMode==='quick'?'quick':'detail';
+  formMode=mode;
+  draft=JSON.parse(JSON.stringify(norm({records:[rec],profiles:state.profiles,selectedProfileId:state.selectedProfileId}).records[0]));
+  draft.recordMode=mode;
+  draft.symptomKeys=draft.symptomKeys||(mode==='quick'?['itchScore','scratchScore']:['itchScore','rednessScore','oozeScore','scaleScore','scratchScore']);
+  detailId=null;
+  tab='home';
+  window.scrollTo(0,0);
+  render();
+}
 function saveRec(){if(!draft.bodyParts.length)return alert('부위를 하나 이상 선택해 주세요.');let i=state.records.findIndex(x=>x.id===draft.id);draft.updatedAt=new Date().toISOString(); if(i>=0)state.records[i]=draft; else state.records.unshift(draft); toast=i>=0?'기록이 수정되었습니다.':'기록이 저장되었습니다.'; draft=null; tab='records'; setTimeout(()=>{toast='';render()},1800); render()}
 function records(){let [y,m]=parseYM(calMonth), all=selectedRecords(), info=calInfo(y,m,all), month=all.filter(r=>{let d=new Date(r.recordedAt);return d.getFullYear()===y&&d.getMonth()===m}), list=month.filter(r=>filter==='severe'?r.symptoms.itchScore>=7||r.symptoms.scratchScore>=7||r.symptoms.rednessScore>=7:filter==='medicine'?!!r.medicines?.trim():true);return `<div class="screen">${header('Records','기록 보기')}${chips(false)}<div class="chips" style="margin-top:16px">${[['all','전체'],['severe','심한 날'],['medicine','약 사용']].map(x=>`<button class="chip ${filter===x[0]?'active':''}" onclick="filter='${x[0]}';render()">${x[1]}</button>`).join('')}</div><section class="card month-card" style="margin-top:16px"><div style="display:flex;justify-content:space-between"><div><button style="font-size:20px;font-weight:700" onclick="showPicker=!showPicker;render()">${y}년 ${m+1}월 ⌄</button><p class="muted" style="font-weight:500"><span style="display:inline-block;width:8px;height:8px;background:#3b82f6;border-radius:50%"></span> 기록 ${month.length}건</p><div class="legend"><span style="color:#ef4444">일요일·공휴일</span><span style="color:#cbd5e1">·</span><span style="color:#2563eb">토요일</span></div></div><div><button onclick="moveMonth(-1)" style="font-size:26px;color:#cbd5e1">‹</button><button onclick="moveMonth(1)" style="font-size:26px;color:#cbd5e1">›</button></div></div>${showPicker?`<div style="background:#f8fafc;border-radius:20px;padding:14px;margin-bottom:16px"><label class="label">보고 싶은 년·월 선택</label><input class="input" type="month" value="${calMonth}" onchange="calMonth=this.value;render()"></div>`:''}<div class="calendar">${['일','월','화','수','목','금','토'].map((d,i)=>`<div class="dow" style="color:${i===0?'#ef4444':i===6?'#2563eb':''}">${d}</div>`).join('')}${info.cells.map((d,i)=>d?`<button class="day ${isHoliday(y,m,d)?'holiday':i%7===0?'sunday':i%7===6?'saturday':''} ${info.mark[d]?'marked':''} ${new Date().getFullYear()===y&&new Date().getMonth()===m&&new Date().getDate()===d?'today':''}"><span class="day-num">${d}</span>${info.mark[d]?'<span class="dot"></span>':'<span style="height:6px"></span>'}</button>`:`<div></div>`).join('')}</div></section><div style="margin-top:16px;display:grid;gap:12px">${list.length?list.map(r=>`<div class="card record"><button class="record-img" onclick="${r.photos?.[0]?.dataUrl?`preview='${r.photos[0].dataUrl}';render()`:'void 0'}">${r.photos?.[0]?.dataUrl?`<img src="${r.photos[0].dataUrl}">`:icon('image')}</button><button style="flex:1;text-align:left" onclick="detailId='${r.id}';render()"><b>${fmt(r.recordedAt)}</b><p class="muted" style="margin:5px 0">${r.bodyParts.map(label).join(' · ')||'부위 없음'}</p><span class="pill orange">가려움 ${r.symptoms.itchScore}</span> <span class="pill rose">긁음 ${r.symptoms.scratchScore}</span></button></div>`).join(''):`<div class="card p20" style="text-align:center">선택한 월의 기록이 없습니다<br><span class="muted small">${y}년 ${m+1}월에는 아직 저장된 기록이 없습니다.</span></div>`}</div></div>`}
 function calInfo(y,m,records){let first=new Date(y,m,1).getDay(),last=new Date(y,m+1,0).getDate(),cells=[];for(let i=0;i<first;i++)cells.push(null);for(let d=1;d<=last;d++)cells.push(d);while(cells.length%7)cells.push(null);let mark={};records.forEach(r=>{let d=new Date(r.recordedAt);if(d.getFullYear()===y&&d.getMonth()===m)mark[d.getDate()]=1});return{cells,mark}}
@@ -95,7 +196,7 @@ function selectProfileType(nextType){
 }
 function renderProfile(){let init=editProfileId?state.profiles.find(p=>p.id===editProfileId):null;let type=init?.type||'child',avatarData=init?.avatarDataUrl||'';document.getElementById('root').innerHTML=`<div class="screen"><div class="title-row"><div><p class="eyebrow">Profile</p><h1 class="h1">${editProfileId?'프로필 수정':addProfile?'가족 / 프로필 추가':'프로필 생성'}</h1></div>${(addProfile||editProfileId)?`<button class="icon-btn" onclick="addProfile=false;editProfileId=null;render()">${icon('back')}</button>`:''}</div><div class="grid2" style="margin-bottom:16px"><button id="typeSelf" class="${type==='self'?'btn btn-soft':'btn btn-white'}" type="button" onclick="selectProfileType('self')">😊 부모</button><button id="typeChild" class="${type==='child'?'btn btn-soft':'btn btn-white'}" type="button" onclick="selectProfileType('child')">😘 아이</button></div><input id="typeHidden" type="hidden" value="${type}"><section class="card p16" style="margin-bottom:16px"><label class="label">프로필 사진</label><div style="display:flex;gap:14px;align-items:center"><span id="avatarPrev" class="avatar" style="width:64px;height:64px">${avatarData?`<img src="${avatarData}">`:emoji({type})}</span><label class="btn btn-white">사진 업로드<input type="file" accept="image/*" hidden onchange="let rd=new FileReader();rd.onload=()=>{document.getElementById('avatarData').value=rd.result;document.getElementById('avatarPrev').innerHTML='<img src=&quot;'+rd.result+'&quot;>'};rd.readAsDataURL(this.files[0])"></label><input id="avatarData" type="hidden" value="${esc(avatarData)}"></div></section><div class="field"><label class="label">이름/별명</label><input id="nick" class="input" value="${esc(init?.nickname||'')}" placeholder="예) 지우"></div><div class="field"><label class="label">생년월일 또는 나이대</label><input id="birth" class="input" value="${esc(init?.birthInfo||'')}" placeholder="예) 2018.05 또는 7세"></div><div class="field"><label class="label">피부질환 메모</label><textarea id="memo" class="textarea" placeholder="예) 결절성 양진 치료 경험, 아토피 병력 등">${esc(init?.skinMemo||'')}</textarea></div><button class="btn btn-primary" style="width:100%;height:56px" onclick="saveProfile('${init?.id||''}')">${editProfileId?'수정 저장':addProfile?'추가':'프로필 저장'}</button></div>`}
 function saveProfile(id){let nick=document.getElementById('nick').value.trim();if(!nick)return alert('이름 또는 별명을 입력해 주세요.');let p={id:id||uid('profile'),type:document.getElementById('typeHidden').value,nickname:nick,birthInfo:document.getElementById('birth').value.trim(),skinMemo:document.getElementById('memo').value.trim(),avatarDataUrl:document.getElementById('avatarData').value,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};let i=state.profiles.findIndex(x=>x.id===p.id); if(i>=0)state.profiles[i]={...state.profiles[i],...p}; else state.profiles.push(p);state.selectedProfileId=p.id;state.onboardingCompleted=true;addProfile=false;editProfileId=null;render()}
-function backup(){dl(`soothenote-backup-${Date.now()}.json`,JSON.stringify(norm(state),null,2),'application/json')}function restore(file){if(!file)return;let rd=new FileReader();rd.onload=()=>{try{state=norm(JSON.parse(rd.result));render();alert('백업 데이터를 불러왔습니다.')}catch(e){alert('백업 파일을 읽을 수 없습니다.')}};rd.readAsText(file)}function resetAll(){if(confirm('모든 데이터를 삭제할까요?')){state={onboardingCompleted:false,profiles:[],selectedProfileId:null,records:[]};localStorage.removeItem(KEY);render()}}
+function backup(){dl(`soothenote-backup-${Date.now()}.json`,JSON.stringify(norm(state),null,2),'application/json')}function restore(file){if(!file)return;let rd=new FileReader();rd.onload=()=>{try{state=norm(JSON.parse(rd.result));render();alert('백업 데이터를 불러왔습니다.')}catch(e){alert('백업 파일을 읽을 수 없습니다.')}};rd.readAsText(file)}function resetAll(){if(confirm('모든 데이터를 삭제할까요?')){state={onboardingCompleted:false,profiles:[],selectedProfileId:null,records:[]};localStorage.removeItem(KEY);deleteDbState();render()}}
 function downloadReport(){dl(`soothenote-report-${reportRange}days.txt`,`${APP_NAME} 병원 리포트\n프로필: ${prof()?.nickname||'-'}\n기간: 최근 ${reportRange}일`,'text/plain;charset=utf-8')}function dl(name,content,type){let b=new Blob([content],{type}),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=name;a.click();URL.revokeObjectURL(u)}
-load();setTimeout(()=>{splash=false;render()},3000);render();
+load().then(()=>{render();setTimeout(()=>{splash=false;render()},3000)}).catch(()=>{render();setTimeout(()=>{splash=false;render()},3000)});
 </script></body></html>
