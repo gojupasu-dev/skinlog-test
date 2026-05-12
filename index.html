@@ -20,7 +20,7 @@
 <body><div id="root" class="app"></div>
 <script>
 const APP_NAME='SootheNote', APP_TAG='우리 가족 피부 기록장', APP_SUB='피부 변화를 차분히 기록해요';
-const KEY='skinlog_mvp_v1', LEGACY_KEYS=['skinlog_mvp_v1','soothenote_app_v1','soothenote_v10','soothenote_test'], DB_NAME='soothenote_local_db', DB_STORE='app_state', DB_STATE_KEY='state_v1', VERSION='v10-ui-tone-step1';
+const KEY='skinlog_mvp_v1', LEGACY_KEYS=['skinlog_mvp_v1','soothenote_app_v1','soothenote_v10','soothenote_test'], DB_NAME='soothenote_local_db', DB_STORE='app_state', DB_STATE_KEY='state_v1', VERSION='v10-daily-skin-tip-8am-mobile';
 const BODY=[['face','얼굴'],['ear','귀'],['neck','목'],['trunk','몸통'],['buttocks','엉덩이'],['arm','팔'],['wrist','손목'],['hand','손'],['leg','다리'],['ankle','발목'],['foot','발'],['other','기타']];
 const LEG={chest:'가슴',belly:'배',back:'등'};
 const HOLIDAYS={'2025-05-05':1,'2025-05-06':1,'2025-06-03':1,'2025-06-06':1,'2025-08-15':1,'2025-10-03':1,'2025-10-05':1,'2025-10-06':1,'2025-10-07':1,'2025-10-08':1,'2025-10-09':1,'2025-12-25':1,'2026-01-01':1,'2026-02-16':1,'2026-02-17':1,'2026-02-18':1,'2026-03-01':1,'2026-03-02':1,'2026-05-05':1,'2026-05-24':1,'2026-05-25':1,'2026-06-03':1,'2026-06-06':1,'2026-08-15':1,'2026-08-17':1,'2026-09-24':1,'2026-09-25':1,'2026-09-26':1,'2026-10-03':1,'2026-10-05':1,'2026-10-09':1,'2026-12-25':1};
@@ -115,7 +115,7 @@ function nowVal(){let d=new Date(); d.setMinutes(d.getMinutes()-d.getTimezoneOff
 function monthVal(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`}
 function dateKey(y,m,d){return `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`}
 function isHoliday(y,m,d){return !!HOLIDAYS[dateKey(y,m,d)]}
-const WEEKLY_SKIN_TIPS=[
+const DAILY_SKIN_TIPS=[
 {title:'보습제는 타이밍이 중요해요',body:'목욕이나 세안 후 피부가 마르기 전에 보습제를 바른 시간을 함께 기록해보세요. 진료 때 건조 악화 패턴을 설명하는 데 도움이 될 수 있어요.',tag:'보습 타이밍'},
 {title:'가려움이 심한 시간대를 남겨보세요',body:'아침, 낮, 잠들기 전 중 언제 가려움이 심한지 적어두면 생활 패턴과 피부 변화의 연결점을 찾는 데 도움이 됩니다.',tag:'가려움 패턴'},
 {title:'사진은 같은 각도에서 남기면 좋아요',body:'가능하면 비슷한 조명과 거리에서 찍어보세요. 변화 비교가 쉬워지고 병원 상담 때도 상태 설명이 더 명확해질 수 있어요.',tag:'사진 기록'},
@@ -128,8 +128,8 @@ const WEEKLY_SKIN_TIPS=[
 {title:'병원 가기 전 최근 7일 기록을 확인해요',body:'진료 전에는 최근 7일의 사진, 가려움 점수, 약 사용 기록을 한 번 훑어보면 상담할 내용을 정리하기 좋습니다.',tag:'진료 준비'},
 {title:'목욕 후 피부 반응을 짧게 남겨보세요',body:'목욕 후 붉어짐이나 가려움이 늘어나는지 기록해보세요. 물 온도, 시간, 보습 타이밍을 함께 보면 더 좋아요.',tag:'목욕 후 기록'},
 {title:'좋아진 날도 기록해두면 도움이 돼요',body:'심한 날뿐 아니라 괜찮았던 날도 남겨두면 어떤 생활 패턴이 도움이 됐는지 비교하기 쉬워집니다.',tag:'좋은 날 기록'}];
-function weeklyTip(){let now=new Date(),m=new Date(now),day=m.getDay(),diff=day===0?-6:1-day;m.setDate(now.getDate()+diff);m.setHours(9,0,0,0);if(now<m)m.setDate(m.getDate()-7);let idx=Math.abs(Math.floor(m.getTime()/604800000))%WEEKLY_SKIN_TIPS.length;return WEEKLY_SKIN_TIPS[idx]}
-function weeklyCard(){let t=weeklyTip();return `<section class="weekly-card"><div class="weekly-top"><div><p class="weekly-eyebrow">이번 주 피부 메모</p><h2 class="weekly-title">${esc(t.title)}</h2></div><span class="weekly-badge">월요일 9시</span></div><p class="weekly-body">${esc(t.body)}</p><span class="weekly-tag">#${esc(t.tag)}</span></section>`}
+function dailyTip(){let now=new Date(),m=new Date(now);m.setHours(8,0,0,0);if(now<m)m.setDate(m.getDate()-1);let idx=Math.abs(Math.floor(m.getTime()/86400000))%DAILY_SKIN_TIPS.length;return DAILY_SKIN_TIPS[idx]}
+function weeklyCard(){let t=dailyTip();return `<section class="weekly-card"><div class="weekly-top"><div><p class="weekly-eyebrow">오늘의 피부 메모</p><h2 class="weekly-title">${esc(t.title)}</h2></div><span class="weekly-badge">매일 8시</span></div><p class="weekly-body">${esc(t.body)}</p><span class="weekly-tag">#${esc(t.tag)}</span></section>`}
 function parseYM(v){let m=String(v).match(/^([0-9]{4})-([0-9]{2})$/);return m?[+m[1],+m[2]-1]:[new Date().getFullYear(),new Date().getMonth()]}
 function fmt(v){let d=new Date(v);return isNaN(d)?'-':new Intl.DateTimeFormat('ko-KR',{month:'long',day:'numeric',weekday:'short',hour:'2-digit',minute:'2-digit'}).format(d)}
 function fmtD(v){let d=new Date(v);return isNaN(d)?'-':new Intl.DateTimeFormat('ko-KR',{month:'long',day:'numeric',weekday:'short'}).format(d)}
